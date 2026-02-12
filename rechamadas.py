@@ -5,13 +5,13 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
-import io # Para lidar com arquivos em memória
+import io
 
-warnings.filterwarnings('ignore') # Ignora avisos do pandas/matplotlib que não impedem a execução
+warnings.filterwarnings('ignore')
 
 # --- CONFIGURAÇÕES GLOBAIS ---
 VALOR_LIGACAO = 7.56
-MIN_LIGACOES_GRAF = 2   # Mínimo de ligações para um telefone aparecer no gráfico de reincidência
+MIN_LIGACOES_GRAF = 2
 
 # --- 1. FUNÇÕES AUXILIARES ---
 def converter_duracao_para_segundos(duracao_str):
@@ -24,234 +24,310 @@ def converter_duracao_para_segundos(duracao_str):
                 return partes[0] * 60 + partes[1]
             elif len(partes) == 3:  # hh:mm:ss
                 return partes[0] * 3600 + partes[1] * 60 + partes[2]
-        else: # Já é um número (segundos)
+        else:
             return int(float(duracao_str))
     except ValueError:
-        return 0 # Retorna 0 se não conseguir converter
+        return 0
 
-# Simplificando detect_datetime_column para focar apenas em nomes de colunas
-def detect_datetime_column(df):
+def detectar_coluna_sugerida(df, tipo='datetime'):
     """
-    Detecta a coluna de data/hora no DataFrame com base em nomes comuns.
-    Retorna o nome da coluna detectada ou None.
+    Detecta e sugere colunas baseado no tipo solicitado.
+    tipo: 'datetime', 'telefone', 'duracao'
     """
-    # Priorizar a coluna 'Data' se ela existir e não for a mesma que 'data_hora'
-    if 'Data' in df.columns and 'data_hora' not in df.columns:
-        return 'Data'
-    for col in df.columns:
-        col_lower = col.lower()
-        # Prioriza nomes mais específicos e depois os genéricos
-        if 'data_hora' == col_lower: return col
-        if 'datetime' == col_lower: return col
-        if 'timestamp' == col_lower: return col
-        if 'Data' == col_lower: return col
-        if 'hora' == col_lower: return col
-        if 'time' == col_lower: return col
-    return None
+    sugestoes = []
 
-# --- 2. CARREGAMENTO E PREPARAÇÃO DOS DADOS (Adaptado para Streamlit e múltiplas abas) ---
-@st.cache_data(show_spinner="Carregando e processando dados...")
-def analisar_ligacoes_callcenter_streamlit(uploaded_file):
+    if tipo == 'datetime':
+        palavras_chave = ['data', 'datetime', 'timestamp', 'hora', 'time', 'date']
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(palavra in col_lower for palavra in palavras_chave):
+                sugestoes.append(col)
+
+    elif tipo == 'telefone':
+        palavras_chave = ['telefone', 'phone', 'numero', 'fone', 'tel', 'ani', 'cliente', 'customer']
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(palavra in col_lower for palavra in palavras_chave):
+                sugestoes.append(col)
+
+    elif tipo == 'duracao':
+        palavras_chave = ['duracao', 'duração', 'duration', 'tempo', 'time']
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(palavra in col_lower for palavra in palavras_chave):
+                sugestoes.append(col)
+
+    return sugestoes[0] if sugestoes else None
+
+# --- 2. CARREGAMENTO INICIAL DOS DADOS ---
+@st.cache_data(show_spinner="Carregando arquivo...")
+def carregar_arquivo_inicial(uploaded_file):
     """
-    Carrega e prepara os dados de ligações de call center de um arquivo uploaded (CSV ou Excel).
-    Detecta automaticamente colunas de data/hora, telefone e duração.
-    Processa todas as abas se for Excel.
+    Carrega o arquivo e retorna DataFrame bruto para seleção de colunas.
     """
     if uploaded_file is None:
-        return None, "Por favor, faça o upload de um arquivo para começar a análise."
+        return None, "Nenhum arquivo carregado."
 
-    file_details = {"filename": uploaded_file.name, "filetype": uploaded_file.type, "filesize": uploaded_file.size}
-    st.write(f"📖 Carregando arquivo: **{file_details['filename']}** ({file_details['filesize'] / 1024:.2f} KB)")
+    file_details = {
+        "filename": uploaded_file.name, 
+        "filetype": uploaded_file.type, 
+        "filesize": uploaded_file.size
+    }
+
+    st.write(f"📖 Arquivo: **{file_details['filename']}** ({file_details['filesize'] / 1024:.2f} KB)")
 
     dfs = []
     file_extension = uploaded_file.name.split('.')[-1].lower()
 
-    if file_extension == 'csv':
-        # Tentar diferentes codificações e separadores para CSV
-        df_temp = None
-        # Para CSVs, precisamos ler o conteúdo em memória para tentar diferentes encodings/seps
-        uploaded_file_content = uploaded_file.getvalue()
+    try:
+        if file_extension == 'csv':
+            uploaded_file_content = uploaded_file.getvalue()
 
-        for encoding in ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']:
-            for sep in [',', ';', '\t']:
-                try:
-                    # Decodifica o conteúdo e usa io.StringIO para simular um arquivo
-                    df_temp = pd.read_csv(io.StringIO(uploaded_file_content.decode(encoding)), sep=sep)
-                    if not df_temp.empty and len(df_temp.columns) > 1:
-                        st.info(f"   - Sucesso com encoding: {encoding}, separador: '{sep}'")
-                        break # Sai do loop de separadores
-                except Exception:
-                    continue # Tenta o próximo separador/encoding
-            if df_temp is not None and not df_temp.empty and len(df_temp.columns) > 1:
-                break # Sai do loop de encodings
+            for encoding in ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']:
+                for sep in [',', ';', '\t']:
+                    try:
+                        df_temp = pd.read_csv(
+                            io.StringIO(uploaded_file_content.decode(encoding)), 
+                            sep=sep
+                        )
+                        if not df_temp.empty and len(df_temp.columns) > 1:
+                            st.success(f"✅ CSV carregado com encoding: {encoding}, separador: '{sep}'")
+                            dfs.append(df_temp)
+                            break
+                    except Exception:
+                        continue
+                if dfs:
+                    break
 
-        if df_temp is None or df_temp.empty or len(df_temp.columns) <= 1:
-            st.error(f"   ❌ Não foi possível carregar o arquivo CSV corretamente. Verifique o formato.")
-            return None, "Erro ao carregar CSV."
-        dfs.append(df_temp)
-
-    elif file_extension in ['xlsx', 'xls']:
-        try:
-            uploaded_file.seek(0) # Garante que o ponteiro está no início do arquivo
+        elif file_extension in ['xlsx', 'xls']:
+            uploaded_file.seek(0)
             excel_file = pd.ExcelFile(uploaded_file)
             sheet_names = excel_file.sheet_names
-            st.info(f"   - Arquivo Excel detectado com {len(sheet_names)} abas: {', '.join(sheet_names)}")
+            st.info(f"📊 Excel com {len(sheet_names)} aba(s): {', '.join(sheet_names)}")
 
             for sheet_name in sheet_names:
-                st.write(f"     Processando aba: **{sheet_name}**")
                 df_temp = pd.read_excel(excel_file, sheet_name=sheet_name)
                 if not df_temp.empty and len(df_temp.columns) > 1:
                     dfs.append(df_temp)
-                else:
-                    st.warning(f"     Aba '{sheet_name}' está vazia ou tem poucas colunas. Ignorando.")
-        except Exception as e:
-            st.error(f"   ❌ Erro ao carregar arquivo Excel: {e}")
-            return None, "Erro ao carregar Excel."
-    else:
-        st.error("   ❌ Formato de arquivo não suportado. Por favor, faça upload de um arquivo CSV ou Excel (.xlsx, .xls).")
-        return None, "Formato de arquivo inválido."
+                    st.success(f"✅ Aba '{sheet_name}' carregada")
 
-    if not dfs:
-        return None, "Nenhum dado válido foi carregado de nenhuma aba/arquivo."
+        if not dfs:
+            return None, "Nenhum dado válido encontrado no arquivo."
 
-    # Concatenar todos os dataframes
-    df_completo = pd.concat(dfs, ignore_index=True)
-    st.success(f"✅ Total de registros combinados de todas as abas: **{len(df_completo):,}**")
+        df_completo = pd.concat(dfs, ignore_index=True)
+        df_completo = df_completo.loc[:, ~df_completo.columns.str.contains('^Unnamed', na=False)]
 
-    # Remover colunas 'Unnamed: X'
-    df_completo = df_completo.loc[:, ~df_completo.columns.str.contains('^Unnamed', na=False)]
+        st.success(f"✅ Total de registros carregados: **{len(df_completo):,}**")
+        return df_completo, None
 
-    # Detectar e padronizar nomes de colunas
-    col_map = {}
-    found_data_hora, found_telefone, found_duracao = False, False, False
+    except Exception as e:
+        return None, f"Erro ao carregar arquivo: {str(e)}"
 
-    # Detectar coluna de data/hora
-    datetime_col_name = detect_datetime_column(df_completo)
-    if datetime_col_name:
-        col_map[datetime_col_name] = 'data_hora'
-        found_data_hora = True
-        st.info(f"   - Coluna de data/hora detectada: '{datetime_col_name}' (renomeada para 'data_hora')")
-    else:
-        st.warning("   - Nenhuma coluna de data/hora com nome comum foi detectada automaticamente.")
+# --- 3. PROCESSAMENTO DOS DADOS COM COLUNAS SELECIONADAS ---
+@st.cache_data(show_spinner="Processando dados...")
+def processar_dados(df_bruto, col_datetime, col_cliente, col_duracao=None):
+    """
+    Processa o DataFrame com as colunas selecionadas pelo usuário.
+    """
+    df = df_bruto.copy()
 
-    for col in df_completo.columns:
-        col_lower = col.lower()
+    # Renomear colunas selecionadas
+    df = df.rename(columns={
+        col_datetime: 'data_hora_original',
+        col_cliente: 'telefone_original'
+    })
 
-        # TELEFONE: incluir 'ani' como sinônimo
-        if not found_telefone and (
-            any(k in col_lower for k in ['telefone', 'phone', 'numero', 'fone', 'tel'])
-            or col_lower == 'ani'
-        ):
-            col_map[col] = 'telefone'
-            found_telefone = True
-            st.info(f"   - Coluna de telefone detectada: '{col}' (renomeada para 'telefone')")
+    if col_duracao and col_duracao in df_bruto.columns:
+        df = df.rename(columns={col_duracao: 'duracao_original'})
 
-        # DURAÇÃO: incluir 'duração' com acento
-        elif not found_duracao and (
-            any(k in col_lower for k in ['duracao', 'duração', 'duration', 'tempo'])
-        ):
-            col_map[col] = 'duracao'
-            found_duracao = True
-            st.info(f"   - Coluna de duração detectada: '{col}' (renomeada para 'duracao')")
+    # --- PROCESSAR DATA/HORA ---
+    st.write("🔄 Processando coluna de data/hora...")
 
+    # Limpeza agressiva da coluna de data/hora
+    df['data_hora_limpa'] = df['data_hora_original'].astype(str).str.strip()
 
+    # Remover espaços múltiplos, tabs, quebras de linha
+    df['data_hora_limpa'] = df['data_hora_limpa'].str.replace(r'\s+', ' ', regex=True)
 
-    df_completo = df_completo.rename(columns=col_map)
+    # Remover caracteres invisíveis comuns (zero-width space, etc)
+    df['data_hora_limpa'] = df['data_hora_limpa'].str.replace(r'[\u200b\u200c\u200d\ufeff]', '', regex=True)
 
-    if not found_data_hora or not found_telefone:
-        st.error(f"   ❌ Não foi possível identificar as colunas 'data_hora' ou 'telefone'. Colunas disponíveis: {list(df_completo.columns)}. Verifique seu arquivo.")
-        return None, "Colunas essenciais não encontradas."
+    # Remover espaços ao redor do T (se existir)
+    df['data_hora_limpa'] = df['data_hora_limpa'].str.replace(r'\s*T\s*', 'T', regex=True)
 
-    # --- Processamento de dados ---
-    # Garantir que 'data_hora' é string e remover espaços em branco
-    df_completo['data_hora'] = df_completo['data_hora'].astype(str).str.strip()
+    # Mostrar amostra dos dados limpos para debug
+    st.write("**Amostra dos dados de data/hora após limpeza:**")
+    amostra_datas = df['data_hora_limpa'].head(10).tolist()
+    for i, data in enumerate(amostra_datas, 1):
+        st.text(f"{i}. '{data}' (tipo: {type(data).__name__}, len: {len(str(data))})")
 
-    # Limpeza adicional: remover caracteres que podem atrapalhar a conversão
-    # Ex: espaços duplos, quebras de linha, etc.
-    df_completo['data_hora'] = df_completo['data_hora'].str.replace(r'\s+', ' ', regex=True)
-
-    # Converter 'data_hora' para datetime
-    st.write("🔄 Convertendo coluna 'data_hora' para datetime...")
-    # Formatos de data/hora, priorizando o formato 'dd/MM/yyyy HH:mm:ss'
+    # Formatos de data/hora em ordem de prioridade
+    # IMPORTANTE: Formatos ISO com T devem vir PRIMEIRO
     datetime_formats = [
-        '%d/%m/%Y %H:%M:%S',      # SEU FORMATO ESPECÍFICO - PRIORIDADE MÁXIMA
-        '%d/%m/%Y %H:%M',         # Seu formato sem segundos
-        '%Y-%m-%dT%H:%M:%S',      # ISO com T
+        '%Y-%m-%dT%H:%M:%S',      # ISO 8601 com T (SEU FORMATO) - PRIORIDADE MÁXIMA
+        '%Y-%m-%dT%H:%M:%S.%f',   # ISO com T e microsegundos
+        '%Y-%m-%dT%H:%M',         # ISO com T sem segundos
         '%Y-%m-%d %H:%M:%S',      # ISO com espaço
-        '%Y-%m-%d %H:%M',         # ISO sem segundos
-        '%Y-%m-%d',               # ISO só data
+        '%Y-%m-%d %H:%M:%S.%f',   # ISO com espaço e microsegundos
+        '%Y-%m-%d %H:%M',         # ISO com espaço sem segundos
+        '%d/%m/%Y %H:%M:%S',      # BR formato completo
+        '%d/%m/%Y %H:%M',         # BR sem segundos
+        '%d-%m-%Y %H:%M:%S',      # BR com traço
+        '%d-%m-%Y %H:%M',         # BR com traço sem segundos
+        '%Y/%m/%d %H:%M:%S',      # ISO com barra
+        '%Y/%m/%d %H:%M',         # ISO com barra sem segundos
         '%d/%m/%Y',               # BR só data
-        '%m/%d/%Y',               # US só data
+        '%Y-%m-%d',               # ISO só data
+        '%Y/%m/%d',               # ISO com barra só data
     ]
 
-    df_completo['datetime'] = pd.NaT # Inicializa com Not a Time
-
-    # Tentar converter em blocos para otimizar e dar feedback
-    total_rows = len(df_completo)
+    # Inicializar coluna de datetime
+    df['datetime'] = pd.NaT
+    total_rows = len(df)
     converted_count = 0
 
+    st.write(f"\n📊 Total de registros a converter: **{total_rows:,}**")
+    st.write("🔍 Tentando conversão com diferentes formatos...\n")
+
+    # Tentar cada formato sequencialmente
     for fmt in datetime_formats:
-        mask = df_completo['datetime'].isna()
-        if not mask.any(): # Se não há mais NaT, todas foram convertidas
+        # Contar quantos ainda estão como NaT
+        mask = df['datetime'].isna()
+        pendentes = mask.sum()
+
+        if pendentes == 0:
+            st.success(f"✅ Todos os {total_rows:,} registros foram convertidos!")
             break
 
-        # Tenta converter apenas as linhas que ainda não foram convertidas
-        df_completo.loc[mask, 'datetime'] = pd.to_datetime(df_completo.loc[mask, 'data_hora'], format=fmt, errors='coerce')
+        # Tentar converter apenas os que ainda são NaT
+        try:
+            df.loc[mask, 'datetime'] = pd.to_datetime(
+                df.loc[mask, 'data_hora_limpa'], 
+                format=fmt, 
+                errors='coerce'
+            )
 
-        newly_converted = (~df_completo.loc[mask, 'datetime'].isna()).sum()
-        if newly_converted > 0:
-            converted_count += newly_converted
-            st.info(f"   - Converteu {newly_converted:,} datas com o formato '{fmt}'. Total convertido: {converted_count:,}/{total_rows:,}")
+            # Contar quantos foram convertidos nesta iteração
+            newly_converted = (~df.loc[mask, 'datetime'].isna()).sum()
 
-    # Última tentativa: inferência automática se ainda houver nulos
-    mask_final = df_completo['datetime'].isna()
-    if mask_final.any():
-        st.warning(f"   - Ainda há {mask_final.sum():,} datas inválidas. Tentando inferência automática de formato (dayfirst=True)...")
-        df_completo.loc[mask_final, 'datetime'] = pd.to_datetime(df_completo.loc[mask_final, 'data_hora'], dayfirst=True, errors='coerce')
-        final_converted = (~df_completo.loc[mask_final, 'datetime'].isna()).sum()
-        if final_converted > 0:
-            converted_count += final_converted
-            st.info(f"   - Converteu {final_converted:,} datas por inferência automática. Total convertido: {converted_count:,}/{total_rows:,}")
+            if newly_converted > 0:
+                converted_count += newly_converted
+                percentual = (converted_count / total_rows) * 100
+                st.info(f"   ✓ Formato `{fmt}`: converteu **{newly_converted:,}** registros | "
+                       f"Total: **{converted_count:,}/{total_rows:,}** ({percentual:.1f}%)")
 
+        except Exception as e:
+            st.warning(f"   ⚠️ Erro ao tentar formato `{fmt}`: {str(e)}")
+            continue
 
-    registros_antes = len(df_completo)
-    df_completo = df_completo.dropna(subset=['datetime'])
-    if len(df_completo) < registros_antes:
-        st.warning(f"⚠️ Removidos {registros_antes - len(df_completo)} registros com data/hora inválida após todas as tentativas de conversão.")
+    # Última tentativa: inferência automática para os que restaram
+    mask_final = df['datetime'].isna()
+    pendentes_final = mask_final.sum()
 
-    if df_completo.empty:
-        st.error("🚨 Todos os registros foram removidos devido a datas/horas inválidas. Verifique o formato da coluna 'data_hora' nos seus arquivos.")
-        return None, "Dados vazios após limpeza de datas."
+    if pendentes_final > 0:
+        st.warning(f"\n⚠️ Ainda há **{pendentes_final:,}** datas não convertidas. "
+                  f"Tentando inferência automática...")
 
-    # Limpar e validar 'telefone'
-    df_completo['telefone'] = df_completo['telefone'].astype(str).str.replace(r'[^\d]', '', regex=True)
-    registros_antes = len(df_completo)
-    df_completo = df_completo[df_completo['telefone'].str.len() >= 8]
-    if len(df_completo) < registros_antes:
-        st.warning(f"⚠️ Removidos {registros_antes - len(df_completo)} registros com telefone inválido (menos de 8 dígitos).")
+        # Mostrar exemplos dos que falharam
+        st.write("**Exemplos de datas que falharam:**")
+        exemplos_falha = df.loc[mask_final, 'data_hora_limpa'].head(10).tolist()
+        for i, data in enumerate(exemplos_falha, 1):
+            st.text(f"{i}. '{data}'")
 
-    # Converter 'duracao' para segundos
-    if 'duracao' in df_completo.columns:
-        df_completo['duracao_segundos'] = df_completo['duracao'].apply(converter_duracao_para_segundos)
+        try:
+            # Tentar com dayfirst=True
+            df.loc[mask_final, 'datetime'] = pd.to_datetime(
+                df.loc[mask_final, 'data_hora_limpa'], 
+                dayfirst=True, 
+                errors='coerce'
+            )
+
+            final_converted = (~df.loc[mask_final, 'datetime'].isna()).sum()
+
+            if final_converted > 0:
+                converted_count += final_converted
+                percentual = (converted_count / total_rows) * 100
+                st.info(f"   ✓ Inferência automática: converteu **{final_converted:,}** registros | "
+                       f"Total: **{converted_count:,}/{total_rows:,}** ({percentual:.1f}%)")
+
+        except Exception as e:
+            st.error(f"   ❌ Erro na inferência automática: {str(e)}")
+
+    # Verificar quantos ainda são NaT após todas as tentativas
+    registros_antes = len(df)
+    nulos_finais = df['datetime'].isna().sum()
+
+    if nulos_finais > 0:
+        st.error(f"\n🚨 **{nulos_finais:,}** registros ({(nulos_finais/total_rows)*100:.1f}%) "
+                f"não puderam ser convertidos e serão removidos.")
+
+        # Mostrar mais exemplos dos que falharam
+        st.write("**Últimos 20 exemplos de datas que falharam completamente:**")
+        mask_nulos = df['datetime'].isna()
+        exemplos_nulos = df.loc[mask_nulos, ['data_hora_original', 'data_hora_limpa']].head(20)
+        st.dataframe(exemplos_nulos)
+
+        # Remover registros com datetime inválido
+        df = df.dropna(subset=['datetime'])
+
+        st.warning(f"⚠️ Removidos {registros_antes - len(df):,} registros com data/hora inválida.")
     else:
-        df_completo['duracao_segundos'] = 0 # Se não houver coluna de duração, assume 0
-        st.warning("   - Coluna 'duracao' não encontrada. Duração das ligações será considerada 0.")
+        st.success(f"\n🎉 **100% dos registros convertidos com sucesso!** ({converted_count:,}/{total_rows:,})")
 
-    # Ordenar para análise de rechamadas
-    df_completo = df_completo.sort_values(['telefone', 'datetime']).reset_index(drop=True)
-    st.success(f"\n✅ Dados processados com sucesso: **{len(df_completo):,}** ligações. Período: **{df_completo['datetime'].min():%d/%m/%Y}** a **{df_completo['datetime'].max():%d/%m/%Y}**")
+    if df.empty:
+        st.error("🚨 Todos os registros foram removidos devido a datas/horas inválidas. "
+                "Verifique o formato da coluna de data/hora.")
+        return None
 
-    # Exibir o número de atendimentos na carga de dados
-    st.metric("Total de Atendimentos (Ligações) Carregados", f"{len(df_completo):,}")
+    # Mostrar estatísticas da conversão
+    st.write("\n📈 **Estatísticas da conversão:**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Registros Originais", f"{total_rows:,}")
+    with col2:
+        st.metric("Convertidos com Sucesso", f"{converted_count:,}")
+    with col3:
+        taxa_sucesso = (converted_count / total_rows) * 100
+        st.metric("Taxa de Sucesso", f"{taxa_sucesso:.1f}%")
 
-    return df_completo, None
+    # Mostrar range de datas
+    st.write(f"\n📅 **Período dos dados:** {df['datetime'].min():%d/%m/%Y %H:%M:%S} "
+            f"até {df['datetime'].max():%d/%m/%Y %H:%M:%S}")
 
-# --- 3. FUNÇÕES DE ANÁLISE (Mantidas como estão, pois operam no DataFrame processado) ---
+    # --- PROCESSAR TELEFONE/CLIENTE ---
+    st.write("\n🔄 Processando coluna de cliente/telefone...")
+    df['telefone'] = df['telefone_original'].astype(str).str.replace(r'[^\d]', '', regex=True)
+
+    registros_antes = len(df)
+    df = df[df['telefone'].str.len() >= 8]
+
+    if len(df) < registros_antes:
+        st.warning(f"⚠️ Removidos {registros_antes - len(df):,} registros com telefone inválido "
+                  f"(menos de 8 dígitos)")
+
+    # --- PROCESSAR DURAÇÃO ---
+    if 'duracao_original' in df.columns:
+        st.write("🔄 Processando coluna de duração...")
+        df['duracao_segundos'] = df['duracao_original'].apply(converter_duracao_para_segundos)
+    else:
+        df['duracao_segundos'] = 0
+        st.info("ℹ️ Sem coluna de duração - usando valor padrão 0")
+
+    # Ordenar para análise
+    df = df.sort_values(['telefone', 'datetime']).reset_index(drop=True)
+
+    st.success(f"\n✅ **{len(df):,}** ligações processadas com sucesso!")
+
+    return df
+
+
+# --- 4. FUNÇÕES DE ANÁLISE (mantidas como no original) ---
 def identificar_faixas_rechamada(df):
     """Identifica rechamadas em faixas de 0-24h, 24-48h, 48-72h."""
     rechamadas = {'0-24h': [], '24-48h': [], '48-72h': []}
     for telefone, grupo in df.groupby('telefone'):
-        if len(grupo) < 2: continue
+        if len(grupo) < 2:
+            continue
         grupo = grupo.sort_values('datetime')
         datas = grupo['datetime'].values
         duras = grupo['duracao_segundos'].values
@@ -265,9 +341,12 @@ def identificar_faixas_rechamada(df):
                 'duracao_primeira_seg': duras[i-1],
                 'duracao_segunda_seg': duras[i]
             }
-            if diff_h <= 24: rechamadas['0-24h'].append(rec)
-            elif 24 < diff_h <= 48: rechamadas['24-48h'].append(rec)
-            elif 48 < diff_h <= 72: rechamadas['48-72h'].append(rec)
+            if diff_h <= 24:
+                rechamadas['0-24h'].append(rec)
+            elif 24 < diff_h <= 48:
+                rechamadas['24-48h'].append(rec)
+            elif 48 < diff_h <= 72:
+                rechamadas['48-72h'].append(rec)
     return rechamadas
 
 def faixas_ligacoes_e_reincidentes(df):
@@ -295,7 +374,8 @@ def clientes_frequentes(df, N=50):
     ).round(2)
     contagem['periodo_atividade_dias'] = (contagem['ultima_ligacao'] - contagem['primeira_ligacao']).dt.days
     contagem['frequencia_ligacoes_por_dia'] = contagem.apply(
-        lambda x: x['total_ligacoes'] / max(1, x['periodo_atividade_dias']) if x['periodo_atividade_dias'] > 0 else x['total_ligacoes'], axis=1
+        lambda x: x['total_ligacoes'] / max(1, x['periodo_atividade_dias']) if x['periodo_atividade_dias'] > 0 else x['total_ligacoes'], 
+        axis=1
     ).round(2)
     contagem['duracao_total_min'] = (contagem['duracao_total_seg'] / 60).round(2)
     contagem['duracao_media_min'] = (contagem['duracao_media_seg'] / 60).round(2)
@@ -314,8 +394,10 @@ def calcular_impacto_financeiro(rechamadas, valor_ligacao=VALOR_LIGACAO):
 
 def gerar_consolidado(df, rechamadas, clientes_frequentes_df, faixas_ligacoes, telefones_reincidentes, impacto_financeiro):
     """Gera um dicionário consolidado com todas as métricas para relatórios."""
-    dias_pt = {'Monday': 'Segunda', 'Tuesday': 'Terça', 'Wednesday': 'Quarta', 
-               'Thursday': 'Quinta', 'Friday': 'Sexta', 'Saturday': 'Sábado', 'Sunday': 'Domingo'}
+    dias_pt = {
+        'Monday': 'Segunda', 'Tuesday': 'Terça', 'Wednesday': 'Quarta',
+        'Thursday': 'Quinta', 'Friday': 'Sexta', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
+    }
     stats = {
         'total_ligacoes': len(df),
         'clientes_unicos': df['telefone'].nunique(),
@@ -348,29 +430,10 @@ def gerar_consolidado(df, rechamadas, clientes_frequentes_df, faixas_ligacoes, t
         'impacto_financeiro': impacto_financeiro
     }
 
-# --- 4. FUNÇÕES DE VISUALIZAÇÃO E RELATÓRIOS (Adaptadas para Streamlit) ---
-def plot_reincidentes_streamlit(contagem_por_telefone, min_ligacoes=MIN_LIGACOES_GRAF):
-    """
-    Gera um histograma da quantidade de ligações por telefone para Streamlit.
-    """
-    reincidentes_filtrados = contagem_por_telefone[contagem_por_telefone >= min_ligacoes]
-    if reincidentes_filtrados.empty:
-        st.warning(f"Nenhum telefone com {min_ligacoes} ou mais ligações para exibir no gráfico de reincidência.")
-        return None
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-    sns.histplot(reincidentes_filtrados, bins=range(min_ligacoes, reincidentes_filtrados.max() + 2), kde=False, color='navy', ax=ax)
-    ax.set_title(f'Distribuição de Telefones por Número de Ligações (≥{min_ligacoes})')
-    ax.set_xlabel('Número de Ligações')
-    ax.set_ylabel('Quantidade de Telefones')
-    ax.set_xticks(range(min_ligacoes, reincidentes_filtrados.max() + 2))
-    plt.tight_layout()
-    return fig
-
+# --- 5. FUNÇÕES DE VISUALIZAÇÃO (mantidas como no original) ---
 def create_dashboard_plots(consolidado, reincidentes_serie, min_ligacoes_graf):
     """Cria os gráficos individuais para o dashboard Streamlit."""
     plt.style.use('seaborn-v0_8-whitegrid')
-
     plots = {}
 
     # 1. Ligações por Dia da Semana
@@ -381,7 +444,9 @@ def create_dashboard_plots(consolidado, reincidentes_serie, min_ligacoes_graf):
     ax_dia.set_title('📅 Ligações por Dia da Semana', fontsize=12)
     ax_dia.tick_params(axis='x', rotation=45, labelsize=10)
     ax_dia.tick_params(axis='y', labelsize=10)
-    for bar in bars_dia: ax_dia.text(bar.get_x() + bar.get_width()/2., bar.get_height(), f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=8)
+    for bar in bars_dia:
+        ax_dia.text(bar.get_x() + bar.get_width()/2., bar.get_height(), 
+                   f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=8)
     plt.tight_layout()
     plots['ligacoes_por_dia'] = fig_dia
 
@@ -393,7 +458,9 @@ def create_dashboard_plots(consolidado, reincidentes_serie, min_ligacoes_graf):
     ax_hora.set_title('🕐 Top 5 Horários de Pico', fontsize=12)
     ax_hora.tick_params(axis='x', labelsize=10)
     ax_hora.tick_params(axis='y', labelsize=10)
-    for bar in bars_hora: ax_hora.text(bar.get_x() + bar.get_width()/2., bar.get_height(), f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=8)
+    for bar in bars_hora:
+        ax_hora.text(bar.get_x() + bar.get_width()/2., bar.get_height(), 
+                    f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=8)
     plt.tight_layout()
     plots['horarios_pico'] = fig_hora
 
@@ -403,10 +470,13 @@ def create_dashboard_plots(consolidado, reincidentes_serie, min_ligacoes_graf):
     faixas_sizes = [v for v in consolidado['faixas_ligacoes'].values() if v > 0]
     if faixas_sizes:
         colors = plt.cm.Pastel1(np.linspace(0, 1, len(faixas_sizes)))
-        ax_faixas.pie(faixas_sizes, labels=faixas_labels, autopct='%1.1f%%', colors=colors, startangle=90, textprops={'fontsize': 10})
+        ax_faixas.pie(faixas_sizes, labels=faixas_labels, autopct='%1.1f%%', 
+                     colors=colors, startangle=90, textprops={'fontsize': 10})
         ax_faixas.set_title('📊 Distribuição por Faixas de Ligações', fontsize=12)
     else:
-        ax_faixas.text(0.5, 0.5, 'Nenhuma faixa de ligação para exibir', horizontalalignment='center', verticalalignment='center', transform=ax_faixas.transAxes, fontsize=10)
+        ax_faixas.text(0.5, 0.5, 'Nenhuma faixa de ligação para exibir', 
+                      horizontalalignment='center', verticalalignment='center', 
+                      transform=ax_faixas.transAxes, fontsize=10)
         ax_faixas.axis('off')
     plt.tight_layout()
     plots['faixas_ligacoes'] = fig_faixas
@@ -419,52 +489,62 @@ def create_dashboard_plots(consolidado, reincidentes_serie, min_ligacoes_graf):
     ax_relig.set_title('📞 Rechamadas por Período', fontsize=12)
     ax_relig.tick_params(axis='x', labelsize=10)
     ax_relig.tick_params(axis='y', labelsize=10)
-    for bar in bars_relig: ax_relig.text(bar.get_x() + bar.get_width()/2., bar.get_height(), f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=8)
+    for bar in bars_relig:
+        ax_relig.text(bar.get_x() + bar.get_width()/2., bar.get_height(), 
+                     f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=8)
     plt.tight_layout()
     plots['rechamadas_por_periodo'] = fig_relig
 
     # 5. Histograma de Reincidência
     fig_hist, ax_hist = plt.subplots(figsize=(8, 4))
     if not reincidentes_serie.empty:
-        sns.histplot(reincidentes_serie, bins=range(min_ligacoes_graf, reincidentes_serie.max() + 2), kde=False, ax=ax_hist, color='darkorchid')
+        sns.histplot(reincidentes_serie, bins=range(min_ligacoes_graf, reincidentes_serie.max() + 2), 
+                    kde=False, ax=ax_hist, color='darkorchid')
         ax_hist.set_title(f'📉 Reincidência (Telefones com ≥{min_ligacoes_graf} Ligações)', fontsize=12)
         ax_hist.set_xlabel('Número de Ligações', fontsize=10)
         ax_hist.set_ylabel('Quantidade de Telefones', fontsize=10)
         ax_hist.tick_params(axis='x', labelsize=9)
         ax_hist.tick_params(axis='y', labelsize=9)
     else:
-        ax_hist.text(0.5, 0.5, 'Nenhum telefone com ≥2 ligações', horizontalalignment='center', verticalalignment='center', transform=ax_hist.transAxes, fontsize=10)
+        ax_hist.text(0.5, 0.5, 'Nenhum telefone com ≥2 ligações', 
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=ax_hist.transAxes, fontsize=10)
         ax_hist.axis('off')
     plt.tight_layout()
     plots['hist_reincidencia'] = fig_hist
 
-    # 6. Top 10 Clientes que Mais Ligaram
+    # 6. Top 10 Clientes
     fig_top_clientes, ax_top_clientes = plt.subplots(figsize=(8, 4))
     top_clientes_df = pd.DataFrame(consolidado['top_clientes']).T
     if not top_clientes_df.empty:
-        bars_top = ax_top_clientes.bar(top_clientes_df.index.astype(str), top_clientes_df['total_ligacoes'], color='teal', edgecolor='black')
+        bars_top = ax_top_clientes.bar(top_clientes_df.index.astype(str), 
+                                       top_clientes_df['total_ligacoes'], 
+                                       color='teal', edgecolor='black')
         ax_top_clientes.set_title('🏆 Top 10 Clientes que Mais Ligaram', fontsize=12)
         ax_top_clientes.set_xlabel('Telefone', fontsize=10)
         ax_top_clientes.set_ylabel('Total de Ligações', fontsize=10)
-        ax_top_clientes.tick_params(axis='x', labelsize=9, rotation=45) 
+        ax_top_clientes.tick_params(axis='x', labelsize=9, rotation=45)
         ax_top_clientes.set_xticklabels(top_clientes_df.index.astype(str), rotation=45, ha='right', fontsize=9)
         ax_top_clientes.tick_params(axis='y', labelsize=9)
-        for bar in bars_top: ax_top_clientes.text(bar.get_x() + bar.get_width()/2., bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=7)
+        for bar in bars_top:
+            ax_top_clientes.text(bar.get_x() + bar.get_width()/2., bar.get_height(), 
+                                f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=7)
     else:
-        ax_top_clientes.text(0.5, 0.5, 'Nenhum cliente frequente encontrado', horizontalalignment='center', verticalalignment='center', transform=ax_top_clientes.transAxes, fontsize=10)
+        ax_top_clientes.text(0.5, 0.5, 'Nenhum cliente frequente encontrado', 
+                           horizontalalignment='center', verticalalignment='center', 
+                           transform=ax_top_clientes.transAxes, fontsize=10)
         ax_top_clientes.axis('off')
     plt.tight_layout()
     plots['top_clientes'] = fig_top_clientes
 
     return plots
 
-def to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, consolidado, faixas_ligacoes, contagem_por_telefone_bruta, reincidentes_serie_filtrada):
-    """
-    Salva todos os resultados em um único arquivo Excel com múltiplas abas em um buffer de memória.
-    """
+def to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, consolidado, 
+                   faixas_ligacoes, contagem_por_telefone_bruta, reincidentes_serie_filtrada):
+    """Salva todos os resultados em Excel."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # --- ABA: Consolidado Geral ---
+        # Consolidado Geral
         stats = consolidado['estatisticas_gerais']
         impacto = consolidado['impacto_financeiro']
         consolidado_data = [
@@ -475,7 +555,7 @@ def to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, consolida
             ['Período de Análise', stats['periodo_analise']],
             ['Duração Total (horas)', stats['duracao_total_horas']],
             ['Duração Média por Ligação (min)', stats['duracao_media_minutos']],
-            ['', ''], # Linha em branco
+            ['', ''],
             ['IMPACTO FINANCEIRO', ''],
             ['Total de Rechamadas', impacto['total_religacoes']],
             ['Custo por Ligação', f"R$ {impacto['valor_por_ligacao']:.2f}"],
@@ -485,19 +565,17 @@ def to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, consolida
             consolidado_data.append([f'Impacto {periodo}', f"R$ {valor:,.2f}"])
         pd.DataFrame(consolidado_data, columns=['Métrica', 'Valor']).to_excel(writer, sheet_name='Consolidado', index=False)
 
-        # --- ABA: Ligações por Dia da Semana ---
-        ligacoes_dia_df = pd.DataFrame(list(consolidado['ligacoes_por_dia'].items()), columns=['Dia da Semana', 'Quantidade'])
-        ligacoes_dia_df.to_excel(writer, sheet_name='Ligacoes_por_Dia', index=False)
+        # Outras abas
+        pd.DataFrame(list(consolidado['ligacoes_por_dia'].items()), 
+                    columns=['Dia da Semana', 'Quantidade']).to_excel(writer, sheet_name='Ligacoes_por_Dia', index=False)
 
-        # --- ABA: Ligações por Hora do Dia (Pico) ---
-        ligacoes_hora_df = pd.DataFrame(list(consolidado['horarios_pico'].items()), columns=['Horário (h)', 'Quantidade'])
-        ligacoes_hora_df.to_excel(writer, sheet_name='Ligacoes_por_Hora', index=False)
+        pd.DataFrame(list(consolidado['horarios_pico'].items()), 
+                    columns=['Horário (h)', 'Quantidade']).to_excel(writer, sheet_name='Ligacoes_por_Hora', index=False)
 
-        # --- ABA: Faixas de Ligações ---
-        faixas_df = pd.DataFrame(list(faixas_ligacoes.items()), columns=['Faixa de Ligações', 'Quantidade de Telefones'])
-        faixas_df.to_excel(writer, sheet_name='Faixas_Ligacoes', index=False)
+        pd.DataFrame(list(faixas_ligacoes.items()), 
+                    columns=['Faixa de Ligações', 'Quantidade de Telefones']).to_excel(writer, sheet_name='Faixas_Ligacoes', index=False)
 
-        # --- ABA: Rechamadas - Resumo ---
+        # Rechamadas
         rechamadas_resumo_data = []
         for periodo, dados in consolidado['religacoes'].items():
             rechamadas_resumo_data.append([
@@ -507,121 +585,200 @@ def to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, consolida
                 f"{dados['tempo_medio_horas']:.1f}h",
                 f"R$ {dados['impacto_financeiro']:,.2f}"
             ])
-        pd.DataFrame(rechamadas_resumo_data, columns=['Período', 'Qtd. Rechamadas', 'Clientes Únicos', 'Tempo Médio', 'Impacto Financeiro']).to_excel(writer, sheet_name='Rechamadas_Resumo', index=False)
+        pd.DataFrame(rechamadas_resumo_data, 
+                    columns=['Período', 'Qtd. Rechamadas', 'Clientes Únicos', 'Tempo Médio', 'Impacto Financeiro']
+                    ).to_excel(writer, sheet_name='Rechamadas_Resumo', index=False)
 
-        # --- ABAS: Rechamadas - Detalhe por Período ---
         for periodo, dados in rechamadas_detalhe.items():
             if dados:
-                df_rechamadas_detalhe = pd.DataFrame(dados)
-                df_rechamadas_detalhe.to_excel(writer, sheet_name=f'Rechamadas_{periodo}', index=False)
+                pd.DataFrame(dados).to_excel(writer, sheet_name=f'Rechamadas_{periodo}', index=False)
 
-        # --- ABA: Top 10 Clientes que Mais Ligaram ---
+        # Top clientes
         top_10_clientes_df = pd.DataFrame(consolidado['top_clientes']).T.reset_index()
         top_10_clientes_df.columns = ['Telefone', 'Total Ligações', 'Frequência/Dia', 'Duração Total (min)']
         top_10_clientes_df.to_excel(writer, sheet_name='Top_10_Clientes', index=False)
 
-        # --- ABA: Reincidência de Telefones (Dados do Gráfico) ---
+        # Reincidência
         if not reincidentes_serie_filtrada.empty:
-            reincidentes_serie_filtrada.rename("Quantidade_Ligacoes").to_frame().to_excel(writer, sheet_name='Reincidencia_Telefones', index=True)
-        else:
-            pd.DataFrame([["Nenhum telefone com mais de uma ligação para o filtro"]], columns=["Info"]).to_excel(writer, sheet_name='Reincidencia_Telefones', index=False)
+            reincidentes_serie_filtrada.rename("Quantidade_Ligacoes").to_frame().to_excel(
+                writer, sheet_name='Reincidencia_Telefones', index=True)
 
-        # --- ABA: Dados Processados Detalhados (Todos os Clientes) ---
+        # Dados detalhados
         clientes_frequentes_todos.to_excel(writer, sheet_name='Dados_Clientes_Detalhados', index=True)
+        contagem_por_telefone_bruta.rename("Quantidade_Ligacoes").to_frame().to_excel(
+            writer, sheet_name='Contagem_Bruta_Telefones', index=True)
 
-        # --- ABA: Contagem Bruta de Ligações por Telefone ---
-        contagem_por_telefone_bruta.rename("Quantidade_Ligacoes").to_frame().to_excel(writer, sheet_name='Contagem_Bruta_Telefones', index=True)
-
-    output.seek(0) # Volta para o início do buffer
+    output.seek(0)
     return output
 
-# --- 5. FUNÇÃO PRINCIPAL (Streamlit App) ---
+# --- 6. APLICAÇÃO STREAMLIT PRINCIPAL ---
 def streamlit_app():
     st.set_page_config(layout="wide", page_title="Análise de Rechamadas Call Center")
 
     st.title("📞 Análise de Rechamadas do Call Center")
-    st.markdown("Faça o upload do seu arquivo de dados (CSV ou Excel com múltiplas abas) para analisar padrões de rechamadas e identificar clientes frequentes.")
+    st.markdown("Faça o upload do seu arquivo de dados (CSV ou Excel) para analisar padrões de rechamadas.")
 
+    # Upload do arquivo
     uploaded_file = st.file_uploader("Escolha um arquivo CSV ou Excel", type=["csv", "xlsx", "xls"])
 
     if uploaded_file is not None:
-        df, error_message = analisar_ligacoes_callcenter_streamlit(uploaded_file)
+        # Carregar arquivo inicial
+        df_bruto, error_message = carregar_arquivo_inicial(uploaded_file)
 
         if error_message:
             st.error(error_message)
-            st.stop() # Para a execução se houver erro no carregamento
+            st.stop()
 
-        if df is not None and not df.empty:
-            st.subheader("Dados Carregados (Amostra)")
-            st.dataframe(df.head())
-
+        if df_bruto is not None and not df_bruto.empty:
             st.markdown("---")
-            st.subheader("Iniciando Análises...")
+            st.subheader("📋 Seleção de Colunas")
 
-            # Executar as análises
-            rechamadas_detalhe = identificar_faixas_rechamada(df)
-            faixas_ligacoes, telefones_reincidentes, contagem_por_telefone_bruta = faixas_ligacoes_e_reincidentes(df)
-            clientes_frequentes_todos = clientes_frequentes(df, N=df['telefone'].nunique()) # Pega todos os clientes para o Excel
-            impacto_financeiro = calcular_impacto_financeiro(rechamadas_detalhe)
-            consolidado = gerar_consolidado(df, rechamadas_detalhe, clientes_frequentes_todos, faixas_ligacoes, telefones_reincidentes, impacto_financeiro)
-            reincidentes_serie_filtrada = contagem_por_telefone_bruta[contagem_por_telefone_bruta >= MIN_LIGACOES_GRAF]
+            # Mostrar amostra dos dados
+            with st.expander("👁️ Visualizar amostra dos dados carregados"):
+                st.dataframe(df_bruto.head(10))
 
-            st.success("✅ Análises concluídas!")
+            # Detectar sugestões automáticas
+            sugestao_datetime = detectar_coluna_sugerida(df_bruto, 'datetime')
+            sugestao_telefone = detectar_coluna_sugerida(df_bruto, 'telefone')
+            sugestao_duracao = detectar_coluna_sugerida(df_bruto, 'duracao')
 
-            st.markdown("---")
-            st.header("Sumário Executivo")
+            colunas_disponiveis = list(df_bruto.columns)
 
+            # Interface de seleção de colunas
             col1, col2, col3 = st.columns(3)
+
             with col1:
-                st.metric("Total de Ligações", f"{consolidado['estatisticas_gerais']['total_ligacoes']:,}")
-                st.metric("Clientes Únicos", f"{consolidado['estatisticas_gerais']['clientes_unicos']:,}")
+                st.markdown("**🕐 Coluna de Data/Hora** *(obrigatória)*")
+                idx_datetime = colunas_disponiveis.index(sugestao_datetime) if sugestao_datetime else 0
+                col_datetime = st.selectbox(
+                    "Selecione a coluna que contém data/hora:",
+                    colunas_disponiveis,
+                    index=idx_datetime,
+                    key='datetime_col'
+                )
+                if sugestao_datetime:
+                    st.caption(f"✅ Sugestão automática: {sugestao_datetime}")
+
             with col2:
-                st.metric("Números com >1 Ligação", f"{consolidado['telefones_reincidentes']:,}")
-                st.metric("Média Ligações/Cliente", f"{consolidado['estatisticas_gerais']['media_ligacoes_por_cliente']:.2f}")
+                st.markdown("**📱 Coluna de Cliente/Telefone** *(obrigatória)*")
+                idx_telefone = colunas_disponiveis.index(sugestao_telefone) if sugestao_telefone else 0
+                col_cliente = st.selectbox(
+                    "Selecione a coluna que identifica o cliente:",
+                    colunas_disponiveis,
+                    index=idx_telefone,
+                    key='cliente_col'
+                )
+                if sugestao_telefone:
+                    st.caption(f"✅ Sugestão automática: {sugestao_telefone}")
+
             with col3:
-                st.metric("Duração Total (horas)", f"{consolidado['estatisticas_gerais']['duracao_total_horas']:,}h")
-                st.metric("Duração Média/Ligação (min)", f"{consolidado['estatisticas_gerais']['duracao_media_minutos']:.1f} min")
+                st.markdown("**⏱️ Coluna de Duração** *(opcional)*")
+                opcoes_duracao = ['Nenhuma'] + colunas_disponiveis
+                idx_duracao = opcoes_duracao.index(sugestao_duracao) if sugestao_duracao else 0
+                col_duracao = st.selectbox(
+                    "Selecione a coluna de duração (se houver):",
+                    opcoes_duracao,
+                    index=idx_duracao,
+                    key='duracao_col'
+                )
+                if sugestao_duracao:
+                    st.caption(f"✅ Sugestão automática: {sugestao_duracao}")
 
-            st.subheader("💰 Impacto Financeiro das Rechamadas")
-            st.metric("Impacto Total Estimado", f"R$ {consolidado['impacto_financeiro']['impacto_total']:,.2f}")
-            st.dataframe(pd.DataFrame(consolidado['impacto_financeiro']['impacto_por_faixa'].items(), columns=['Período', 'Impacto Financeiro (R$)']).set_index('Período'))
+            # Validação
+            if col_datetime == col_cliente:
+                st.error("❌ As colunas de data/hora e cliente não podem ser iguais!")
+                st.stop()
 
-            st.markdown("---")
-            st.header("Visualizações Detalhadas")
+            # Botão para processar
+            if st.button("🚀 Processar Dados", type="primary"):
+                col_duracao_final = None if col_duracao == 'Nenhuma' else col_duracao
 
-            # Gerar e exibir os gráficos
-            dashboard_plots = create_dashboard_plots(consolidado, reincidentes_serie_filtrada, MIN_LIGACOES_GRAF)
+                # Processar dados
+                df_processado = processar_dados(df_bruto, col_datetime, col_cliente, col_duracao_final)
 
-            st.subheader("📅 Ligações por Dia da Semana")
-            st.pyplot(dashboard_plots['ligacoes_por_dia'])
+                if df_processado is None or df_processado.empty:
+                    st.error("Não foi possível processar os dados. Verifique as colunas selecionadas.")
+                    st.stop()
 
-            st.subheader("🕐 Top 5 Horários de Pico")
-            st.pyplot(dashboard_plots['horarios_pico'])
+                # Armazenar no session_state para persistir
+                st.session_state['df_processado'] = df_processado
+                st.session_state['processamento_concluido'] = True
 
-            st.subheader("📊 Distribuição por Faixas de Ligações")
-            st.pyplot(dashboard_plots['faixas_ligacoes'])
+            # Se já processou, mostrar análises
+            if st.session_state.get('processamento_concluido', False):
+                df = st.session_state['df_processado']
 
-            st.subheader("📞 Rechamadas por Período")
-            st.pyplot(dashboard_plots['rechamadas_por_periodo'])
+                st.markdown("---")
+                st.subheader("📊 Executando Análises...")
 
-            st.subheader(f"📉 Reincidência (Telefones com ≥{MIN_LIGACOES_GRAF} Ligações)")
-            st.pyplot(dashboard_plots['hist_reincidencia'])
+                # Análises
+                rechamadas_detalhe = identificar_faixas_rechamada(df)
+                faixas_ligacoes, telefones_reincidentes, contagem_por_telefone_bruta = faixas_ligacoes_e_reincidentes(df)
+                clientes_frequentes_todos = clientes_frequentes(df, N=df['telefone'].nunique())
+                impacto_financeiro = calcular_impacto_financeiro(rechamadas_detalhe)
+                consolidado = gerar_consolidado(df, rechamadas_detalhe, clientes_frequentes_todos, 
+                                               faixas_ligacoes, telefones_reincidentes, impacto_financeiro)
+                reincidentes_serie_filtrada = contagem_por_telefone_bruta[contagem_por_telefone_bruta >= MIN_LIGACOES_GRAF]
 
-            st.subheader("🏆 Top 10 Clientes que Mais Ligaram")
-            st.pyplot(dashboard_plots['top_clientes'])
+                st.success("✅ Análises concluídas!")
 
-            st.markdown("---")
-            st.header("Download dos Resultados")
+                # Sumário Executivo
+                st.markdown("---")
+                st.header("📈 Sumário Executivo")
 
-            excel_buffer = to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, consolidado, faixas_ligacoes, contagem_por_telefone_bruta, reincidentes_serie_filtrada)
-            st.download_button(
-                label="📥 Baixar Relatório Completo em Excel",
-                data=excel_buffer,
-                file_name=f"analise_callcenter_completa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.warning("Nenhum dado válido para análise após o processamento.")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total de Ligações", f"{consolidado['estatisticas_gerais']['total_ligacoes']:,}")
+                    st.metric("Clientes Únicos", f"{consolidado['estatisticas_gerais']['clientes_unicos']:,}")
+                with col2:
+                    st.metric("Números com >1 Ligação", f"{consolidado['telefones_reincidentes']:,}")
+                    st.metric("Média Ligações/Cliente", f"{consolidado['estatisticas_gerais']['media_ligacoes_por_cliente']:.2f}")
+                with col3:
+                    st.metric("Duração Total (horas)", f"{consolidado['estatisticas_gerais']['duracao_total_horas']:,}h")
+                    st.metric("Duração Média/Ligação (min)", f"{consolidado['estatisticas_gerais']['duracao_media_minutos']:.1f} min")
+
+                st.subheader("💰 Impacto Financeiro das Rechamadas")
+                st.metric("Impacto Total Estimado", f"R$ {consolidado['impacto_financeiro']['impacto_total']:,.2f}")
+                st.dataframe(pd.DataFrame(consolidado['impacto_financeiro']['impacto_por_faixa'].items(), 
+                                        columns=['Período', 'Impacto Financeiro (R$)']).set_index('Período'))
+
+                # Visualizações
+                st.markdown("---")
+                st.header("📊 Visualizações Detalhadas")
+
+                dashboard_plots = create_dashboard_plots(consolidado, reincidentes_serie_filtrada, MIN_LIGACOES_GRAF)
+
+                st.subheader("📅 Ligações por Dia da Semana")
+                st.pyplot(dashboard_plots['ligacoes_por_dia'])
+
+                st.subheader("🕐 Top 5 Horários de Pico")
+                st.pyplot(dashboard_plots['horarios_pico'])
+
+                st.subheader("📊 Distribuição por Faixas de Ligações")
+                st.pyplot(dashboard_plots['faixas_ligacoes'])
+
+                st.subheader("📞 Rechamadas por Período")
+                st.pyplot(dashboard_plots['rechamadas_por_periodo'])
+
+                st.subheader(f"📉 Reincidência (Telefones com ≥{MIN_LIGACOES_GRAF} Ligações)")
+                st.pyplot(dashboard_plots['hist_reincidencia'])
+
+                st.subheader("🏆 Top 10 Clientes que Mais Ligaram")
+                st.pyplot(dashboard_plots['top_clientes'])
+
+                # Download
+                st.markdown("---")
+                st.header("💾 Download dos Resultados")
+
+                excel_buffer = to_excel_buffer(df, rechamadas_detalhe, clientes_frequentes_todos, 
+                                              consolidado, faixas_ligacoes, contagem_por_telefone_bruta, 
+                                              reincidentes_serie_filtrada)
+                st.download_button(
+                    label="📥 Baixar Relatório Completo em Excel",
+                    data=excel_buffer,
+                    file_name=f"analise_callcenter_completa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 if __name__ == "__main__":
     streamlit_app()
